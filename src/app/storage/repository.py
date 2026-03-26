@@ -164,6 +164,26 @@ class SyncRepository:
             ).fetchall()
         return [row["spotify_track_id"] for row in rows]
 
+    def replace_downloads_cache(self, candidates: list[tuple[str, str, str | None]]) -> int:
+        with self.connection() as conn:
+            conn.execute("DELETE FROM downloads_cache")
+            conn.executemany(
+                """
+                INSERT INTO downloads_cache(soundeo_track_id, normalized_track_key, downloaded_at, source)
+                VALUES (?, ?, ?, 'parsed_from_downloaded_page')
+                """,
+                candidates,
+            )
+        return len(candidates)
+
+    def is_track_downloaded(self, normalized_track_key: str) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM downloads_cache WHERE normalized_track_key = ? LIMIT 1",
+                (normalized_track_key,),
+            ).fetchone()
+        return row is not None
+
     def was_action_recorded(self, spotify_track_id: str, action_type: ActionType) -> bool:
         with self.connection() as conn:
             row = conn.execute(
@@ -177,4 +197,3 @@ class SyncRepository:
         output = settings.reports_dir / filename
         output.write_text(json.dumps(asdict(summary), default=str, indent=2), encoding="utf-8")
         return output
-

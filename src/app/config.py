@@ -71,18 +71,44 @@ class AppSettings:
             self.base_dir / "playwright" / ".auth",
         )
         self.sqlite_path = _as_path(os.getenv("SQLITE_PATH"), self.data_dir / "app.db")
+        self.spotify_token_cache_path = _as_path(
+            os.getenv("SPOTIFY_TOKEN_CACHE_PATH"),
+            self.data_dir / "spotify_tokens.json",
+        )
 
         self.spotify_client_id = os.getenv("SPOTIFY_CLIENT_ID")
         self.spotify_client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
         self.spotify_refresh_token = os.getenv("SPOTIFY_REFRESH_TOKEN")
         self.spotify_access_token = os.getenv("SPOTIFY_ACCESS_TOKEN")
         self.spotify_redirect_uri = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8899/callback")
+        self.spotify_scope = os.getenv("SPOTIFY_SCOPE", "user-library-read")
         self.spotify_page_size = _as_int(os.getenv("SPOTIFY_PAGE_SIZE"), 50, min_value=1, max_value=50)
+        self.spotify_request_timeout_seconds = _as_int(
+            os.getenv("SPOTIFY_REQUEST_TIMEOUT_SECONDS"),
+            30,
+            min_value=5,
+        )
+        self.spotify_request_retry_count = _as_int(
+            os.getenv("SPOTIFY_REQUEST_RETRY_COUNT"),
+            3,
+            min_value=0,
+        )
+        self.spotify_request_retry_backoff_seconds = _as_float(
+            os.getenv("SPOTIFY_REQUEST_RETRY_BACKOFF_SECONDS"),
+            2.0,
+        )
+        self.spotify_recent_days_on_first_sync = _as_int(
+            os.getenv("SPOTIFY_RECENT_DAYS_ON_FIRST_SYNC"),
+            7,
+            min_value=1,
+        )
 
         self.soundeo_base_url = os.getenv("SOUNDEO_BASE_URL", "https://soundeo.com")
-        self.soundeo_login_url = os.getenv("SOUNDEO_LOGIN_URL", "https://soundeo.com/login")
-        self.soundeo_search_url = os.getenv("SOUNDEO_SEARCH_URL", "https://soundeo.com/search")
-        self.soundeo_downloads_url = os.getenv("SOUNDEO_DOWNLOADS_URL", "https://soundeo.com/downloaded")
+        self.soundeo_login_url = os.getenv("SOUNDEO_LOGIN_URL", self.soundeo_base_url)
+        self.soundeo_search_url = os.getenv("SOUNDEO_SEARCH_URL", self.soundeo_base_url)
+        self.soundeo_downloads_url = os.getenv("SOUNDEO_DOWNLOADS_URL", "https://soundeo.com/account/downloads")
+        self.soundeo_votes_url = os.getenv("SOUNDEO_VOTES_URL", "https://soundeo.com/account/votes")
+        self.soundeo_favorites_url = os.getenv("SOUNDEO_FAVORITES_URL", "https://soundeo.com/account/favorites")
         self.soundeo_username = os.getenv("SOUNDEO_USERNAME")
         self.soundeo_password = os.getenv("SOUNDEO_PASSWORD")
 
@@ -98,6 +124,7 @@ class AppSettings:
         self.reports_dir = self.reports_dir.resolve()
         self.playwright_state_dir = self.playwright_state_dir.resolve()
         self.sqlite_path = self.sqlite_path.resolve()
+        self.spotify_token_cache_path = self.spotify_token_cache_path.resolve()
 
     def model_dump(self) -> dict[str, object]:
         return self.__dict__.copy()

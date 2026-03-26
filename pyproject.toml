@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 automation = [
-  "playwright>=1.52.0",
+  "playwright==1.58.0",
 ]
 matching = [
   "rapidfuzz>=3.13.0",

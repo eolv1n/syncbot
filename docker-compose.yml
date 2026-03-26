@@ -19,6 +19,8 @@ services:
       - ./logs:/app/logs
       - ./artifacts:/app/artifacts
       - ./playwright:/app/playwright
+    ports:
+      - "8899:8899"
     command: ["python", "-m", "app", "dry-run"]
 
   scheduler:
@@ -47,4 +49,3 @@ services:
       - while true; do python -m app daily-sync; sleep 86400; done
     restart: unless-stopped
     profiles: ["scheduler"]
-

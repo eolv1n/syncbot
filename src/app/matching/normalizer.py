@@ -32,6 +32,20 @@ def extract_remix(value: str) -> str | None:
     return remix or None
 
 
+def normalize_text(value: str) -> str:
+    return _clean_piece(value)
+
+
+def build_normalized_track_key(artists: str, title: str, remix: str | None = None) -> str:
+    artist_part = _clean_piece(artists)
+    title_part = _clean_piece(title)
+    remix_part = _clean_piece(remix) if remix else None
+    if remix_part:
+        title_part = re.sub(rf"\b{re.escape(remix_part)}\b", " ", title_part).strip()
+        title_part = re.sub(r"\s+", " ", title_part).strip()
+    return " ".join(part for part in (artist_part, title_part, remix_part) if part).strip()
+
+
 def normalize_track(track: SpotifyTrack) -> NormalizedTrack:
     remix = extract_remix(track.title_raw)
     artist = _clean_piece(track.artists_raw)
@@ -39,7 +53,7 @@ def normalize_track(track: SpotifyTrack) -> NormalizedTrack:
     if remix:
         title = re.sub(rf"\b{re.escape(remix)}\b", " ", title).strip()
         title = re.sub(r"\s+", " ", title).strip()
-    normalized_query = " ".join(part for part in (artist, title, remix) if part).strip()
+    normalized_query = build_normalized_track_key(track.artists_raw, track.title_raw, remix)
     return NormalizedTrack(
         artist=artist,
         title=title,
