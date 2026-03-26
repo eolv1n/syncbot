@@ -184,6 +184,14 @@ class SyncRepository:
             ).fetchone()
         return row is not None
 
+    def is_soundeo_track_downloaded(self, soundeo_track_id: str) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM downloads_cache WHERE soundeo_track_id = ? LIMIT 1",
+                (soundeo_track_id,),
+            ).fetchone()
+        return row is not None
+
     def was_action_recorded(self, spotify_track_id: str, action_type: ActionType) -> bool:
         with self.connection() as conn:
             row = conn.execute(

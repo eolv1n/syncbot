@@ -46,14 +46,23 @@ class SoundeoAutomation:
             self._wait_after_action()
             return []
 
-        self._ensure_logged_in(page)
-        page.goto(self.settings.soundeo_search_url, wait_until="domcontentloaded")
-        search_input = page.locator("input[placeholder='Search']").first
-        search_input.wait_for(timeout=10_000)
-        search_input.fill(normalized.normalized_query)
-        search_input.press("Enter")
-        self._wait_after_action()
-        return self._extract_candidates(page, max_results=self.settings.soundeo_max_results)
+        for attempt in range(2):
+            self._ensure_logged_in(page)
+            page.goto(self.settings.soundeo_search_url, wait_until="domcontentloaded")
+            search_input = page.locator("input[placeholder='Search']").first
+            try:
+                search_input.wait_for(timeout=10_000)
+                search_input.fill(normalized.normalized_query)
+                search_input.press("Enter")
+                self._wait_after_action()
+                return self._extract_candidates(page, max_results=self.settings.soundeo_max_results)
+            except Exception:
+                LOGGER.warning("Soundeo search page was not ready on attempt %s for '%s'.", attempt + 1, normalized.normalized_query)
+                self._logged_in = False
+                if attempt == 1:
+                    raise
+                self._wait_after_action()
+        return []
 
     def apply_action(self, match: MatchResult, action_type: ActionType) -> TrackStatus:
         page = self._ensure_page()

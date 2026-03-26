@@ -73,7 +73,12 @@ class SyncRunner:
             normalized = normalize_track(track)
             if self.repository.upsert_spotify_track(track, normalized):
                 summary.newly_seen += 1
-            self._process_track(track, normalized, summary)
+            try:
+                self._process_track(track, normalized, summary)
+            except Exception:
+                LOGGER.exception("Track sync failed: %s", track.spotify_track_id)
+                summary.errors += 1
+                summary.problem_tracks.append(track.spotify_track_id)
 
     def _process_track(self, track: SpotifyTrack, normalized, summary: RunSummary) -> None:
         if self.repository.is_track_downloaded(normalized.normalized_query):
@@ -91,6 +96,13 @@ class SyncRunner:
                 self.repository.put_waitlist(track.spotify_track_id, WaitlistReason.NOT_FOUND, self.settings.waitlist_retry_days)
                 self.repository.record_action(track.spotify_track_id, ActionType.WAITLIST_ADD, TrackStatus.NOT_FOUND_WAITLIST.value)
             summary.waitlisted += 1
+            return
+
+        if self.repository.is_soundeo_track_downloaded(match.candidate.soundeo_track_id):
+            if not self.settings.dry_run:
+                self.repository.record_match(track.spotify_track_id, match, TrackStatus.DOWNLOADED_ALREADY)
+                self.repository.record_action(track.spotify_track_id, ActionType.SKIP, TrackStatus.DOWNLOADED_ALREADY.value)
+            summary.downloaded_already += 1
             return
 
         if match.candidate.is_downloaded:
