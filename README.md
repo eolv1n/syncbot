@@ -1,20 +1,22 @@
 # spotify-soundeo-sync
 
-Production-oriented scaffold for syncing Spotify liked tracks into Soundeo actions.
+Production-oriented sync tool for mirroring Spotify liked tracks into Soundeo actions.
 
 ## What is ready
 
 - CLI modes: `sync-downloads-cache`, `full-sync`, `daily-sync`, `retry-waitlist`, `dry-run`
 - SQLite state storage and JSON run reports
-- Track normalization and fuzzy matching
+- Spotify OAuth with local token cache
+- Soundeo login, search, favorites, votes, and downloads-page parsing
+- Track normalization and guarded matching
 - Runtime directories for logs and artifacts
 - Deployment examples for `systemd`, `cron`, and Docker
 - Docker-first path for local checks and server install
 
 ## What still needs project-specific setup
 
-- Spotify OAuth credentials and token flow
-- Real Soundeo selectors, login flow, and action handlers
+- Spotify OAuth credentials
+- Soundeo account credentials
 - Optional Telegram notifications
 
 ## Quick start
@@ -79,6 +81,22 @@ Recommended flow:
 - if found but only vote-able, it votes
 - if not found, it stores a local waitlist entry
 
+Suggested first real run:
+- `sync-downloads-cache` once to cache the whole Soundeo downloads history
+- `daily-sync` for normal day-to-day usage
+- `full-sync` only as a separate long-running historical backfill
+
+Important matching rules:
+- Spotify source is only `Liked Songs` / saved tracks
+- artist overlap is required
+- main track title must also match closely
+- `extended`, `original`, `remix`, `edit` act as supporting hints, not as the main match signal
+- if a candidate is weak or ambiguous, the track should go to waitlist rather than to favorites
+
+Important download protection:
+- a track is treated as already downloaded if either its normalized key or the matched Soundeo `track_id` exists in `downloads_cache`
+- because of that, running `sync-downloads-cache` before `full-sync` is strongly recommended
+
 ## Spotify setup
 
 1. Create an app in Spotify Developer Dashboard.
@@ -140,6 +158,14 @@ docker compose run --rm app python -m app retry-waitlist
 docker compose run --rm app python -m app dry-run
 ```
 
+For large Soundeo history imports you can speed up the cache build:
+
+```bash
+docker compose run --rm -e RATE_LIMIT_SECONDS=0.2 app python -m app sync-downloads-cache
+```
+
+The terminal will print pagination progress while the downloads cache is being collected.
+
 ### Alternative: native Python
 
 Example target path:
@@ -190,11 +216,14 @@ docker compose run --rm app python -m app dry-run
 
 ## Notes on Soundeo automation
 
-`src/app/integrations/soundeo.py` intentionally contains a safe scaffold. Before active use, replace placeholder search and click logic with:
+`src/app/integrations/soundeo.py` contains the current Soundeo automation logic. It already handles the main workflow, but you should still expect occasional site-specific maintenance if Soundeo changes layout or behavior.
 
-- stable selectors for login, search, star and like controls
-- downloaded-page parsing
-- fallback hotkeys only where DOM automation is not stable
-- error screenshots and HTML dumps from real pages
+Current behavior:
+- login is performed from the main page modal
+- search uses the global Soundeo search field
+- favorites are used for tracks you want to download later
+- votes are used for tracks that exist but are not yet downloadable
+- downloads cache is parsed from `https://soundeo.com/account/downloads`
+- error screenshots and HTML dumps are written into `artifacts/`
 
 If you already have a prepared Python environment on the server, you can run directly with `PYTHONPATH=src python3 -m app ...` and skip editable install for the first smoke test.
