@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+
+from app.config import AppSettings
+from app.integrations.soundeo import SoundeoAutomation
+from app.integrations.spotify import SpotifyClient
+from app.matching.matcher import pick_best_match
+from app.matching.normalizer import normalize_track
+from app.models import ActionType, RunSummary, SpotifyTrack, TrackStatus, WaitlistReason
+from app.services.reporting import print_summary
+from app.storage.repository import SyncRepository
+
+LOGGER = logging.getLogger(__name__)
+
+
+class SyncRunner:
+    def __init__(self, settings: AppSettings):
+        self.settings = settings
+        self.repository = SyncRepository(settings.sqlite_path)
+        self.spotify = SpotifyClient(settings)
+        self.soundeo = SoundeoAutomation(settings)
+
+    def run(self, mode: str) -> int:
+        summary = RunSummary(mode=mode)
+        try:
+            if mode == "initial-sync":
+                self._run_tracks(self.spotify.get_liked_tracks(), summary)
+                self.repository.set_state("last_full_sync_at", summary.started_at.isoformat())
+            elif mode == "daily-sync":
+                after = self._last_daily_sync()
+                self._run_tracks(self.spotify.get_liked_tracks(after=after), summary)
+                self.repository.set_state("last_daily_sync_at", datetime.now(UTC).isoformat())
+            elif mode == "retry-waitlist":
+                self._retry_waitlist(summary)
+            elif mode == "dry-run":
+                previous = self.settings.dry_run
+                self.settings.dry_run = True
+                self._run_tracks(self.spotify.get_liked_tracks(after=self._last_daily_sync()), summary)
+                self.settings.dry_run = previous
+            else:
+                raise ValueError(f"Unsupported mode: {mode}")
+        except Exception as exc:
+            LOGGER.exception("Sync failed: %s", exc)
+            summary.errors += 1
+            summary.problem_tracks.append(str(exc))
+            report_path = self.repository.export_summary(self.settings, summary)
+            print_summary(summary, report_path)
+            return 1
+
+        report_path = self.repository.export_summary(self.settings, summary)
+        print_summary(summary, report_path)
+        return 0
+
+    def _last_daily_sync(self) -> datetime | None:
+        value = self.repository.get_state("last_daily_sync_at")
+        return datetime.fromisoformat(value) if value else None
+
+    def _run_tracks(self, tracks: list[SpotifyTrack], summary: RunSummary) -> None:
+        for track in tracks:
+            summary.processed += 1
+            normalized = normalize_track(track)
+            if self.repository.upsert_spotify_track(track, normalized):
+                summary.newly_seen += 1
+            self._process_track(track, normalized, summary)
+
+    def _process_track(self, track: SpotifyTrack, normalized, summary: RunSummary) -> None:
+        candidates = self.soundeo.search_track(normalized)
+        match = pick_best_match(track, candidates)
+
+        if match.candidate is None:
+            self.repository.record_match(track.spotify_track_id, match, TrackStatus.NOT_FOUND_WAITLIST)
+            self.repository.put_waitlist(track.spotify_track_id, WaitlistReason.NOT_FOUND, self.settings.waitlist_retry_days)
+            self.repository.record_action(track.spotify_track_id, ActionType.WAITLIST_ADD, TrackStatus.NOT_FOUND_WAITLIST.value)
+            summary.waitlisted += 1
+            return
+
+        if match.candidate.is_downloaded:
+            self.repository.record_match(track.spotify_track_id, match, TrackStatus.DOWNLOADED_ALREADY)
+            self.repository.record_action(track.spotify_track_id, ActionType.SKIP, TrackStatus.DOWNLOADED_ALREADY.value)
+            summary.downloaded_already += 1
+            return
+
+        if match.candidate.is_available:
+            if not self.repository.was_action_recorded(track.spotify_track_id, ActionType.STAR):
+                status = self.soundeo.apply_action(match, ActionType.STAR)
+                self.repository.record_action(track.spotify_track_id, ActionType.STAR, status.value)
+                self.repository.record_match(track.spotify_track_id, match, status)
+                summary.starred += 1
+            return
+
+        if not self.repository.was_action_recorded(track.spotify_track_id, ActionType.LIKE):
+            status = self.soundeo.apply_action(match, ActionType.LIKE)
+            self.repository.record_action(track.spotify_track_id, ActionType.LIKE, status.value)
+            self.repository.record_match(track.spotify_track_id, match, status)
+            self.repository.put_waitlist(
+                track.spotify_track_id,
+                WaitlistReason.NOT_AVAILABLE_YET,
+                self.settings.waitlist_retry_days,
+            )
+            summary.liked += 1
+
+    def _retry_waitlist(self, summary: RunSummary) -> None:
+        track_ids = set(self.repository.get_waitlist_tracks_due())
+        if not track_ids:
+            LOGGER.info("No waitlist tracks are due for retry.")
+            return
+
+        tracks = self.spotify.get_liked_tracks()
+        due_tracks = [track for track in tracks if track.spotify_track_id in track_ids]
+        self._run_tracks(due_tracks, summary)
+

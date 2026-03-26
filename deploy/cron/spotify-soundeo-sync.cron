@@ -1,0 +1,1 @@
+15 3 * * * cd /opt/spotify-soundeo-sync && ./.venv/bin/python -m app daily-sync >> logs/cron.log 2>&1

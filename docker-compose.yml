@@ -1,0 +1,50 @@
+services:
+  app:
+    build:
+      context: .
+    image: spotify-soundeo-sync:latest
+    env_file:
+      - .env
+    environment:
+      BASE_DIR: /app
+      DATA_DIR: /app/data
+      LOGS_DIR: /app/logs
+      ARTIFACTS_DIR: /app/artifacts
+      SCREENSHOTS_DIR: /app/artifacts/screenshots
+      HTML_DIR: /app/artifacts/html
+      REPORTS_DIR: /app/artifacts/reports
+      PLAYWRIGHT_STATE_DIR: /app/playwright/.auth
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./artifacts:/app/artifacts
+      - ./playwright:/app/playwright
+    command: ["python", "-m", "app", "dry-run"]
+
+  scheduler:
+    build:
+      context: .
+    image: spotify-soundeo-sync:latest
+    env_file:
+      - .env
+    environment:
+      BASE_DIR: /app
+      DATA_DIR: /app/data
+      LOGS_DIR: /app/logs
+      ARTIFACTS_DIR: /app/artifacts
+      SCREENSHOTS_DIR: /app/artifacts/screenshots
+      HTML_DIR: /app/artifacts/html
+      REPORTS_DIR: /app/artifacts/reports
+      PLAYWRIGHT_STATE_DIR: /app/playwright/.auth
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./artifacts:/app/artifacts
+      - ./playwright:/app/playwright
+    command:
+      - /bin/bash
+      - -lc
+      - while true; do python -m app daily-sync; sleep 86400; done
+    restart: unless-stopped
+    profiles: ["scheduler"]
+
