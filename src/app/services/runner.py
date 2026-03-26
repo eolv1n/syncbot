@@ -140,8 +140,10 @@ class SyncRunner:
         self._run_tracks(due_tracks, summary)
 
     def _sync_downloads_cache(self, summary: RunSummary) -> None:
+        LOGGER.info("Starting Soundeo downloads cache sync.")
         candidates = self.soundeo.refresh_downloaded_cache()
         rows = self.soundeo.to_download_cache_rows(candidates)
         cached = self.repository.replace_downloads_cache(rows)
+        LOGGER.info("Soundeo downloads cache sync completed: %s cached tracks written to sqlite.", cached)
         summary.processed = cached
         summary.downloaded_already = cached

@@ -32,6 +32,7 @@ class SoundeoAutomation:
             return []
 
         self._ensure_logged_in(page)
+        LOGGER.info("Refreshing Soundeo downloads cache from %s", self.settings.soundeo_downloads_url)
         return self._extract_paginated_candidates(
             page=page,
             start_url=self.settings.soundeo_downloads_url,
@@ -235,16 +236,26 @@ class SoundeoAutomation:
         candidates: list[SoundeoCandidate] = []
         seen_ids: set[str] = set()
         max_page = self._max_pagination_page(page)
+        LOGGER.info("Soundeo pagination discovered: %s pages starting from %s", max_page, start_url)
 
         for page_number in range(1, max_page + 1):
             url = start_url if page_number == 1 else f"{start_url}?page={page_number}"
+            LOGGER.info("Scanning Soundeo page %s/%s: %s", page_number, max_page, url)
             page.goto(url, wait_until="domcontentloaded")
             self._wait_after_action()
+            before = len(candidates)
             for candidate in self._extract_candidates(page, mark_downloaded=mark_downloaded, max_results=None):
                 if candidate.soundeo_track_id in seen_ids:
                     continue
                 seen_ids.add(candidate.soundeo_track_id)
                 candidates.append(candidate)
+            LOGGER.info(
+                "Collected %s new tracks from page %s/%s (%s total)",
+                len(candidates) - before,
+                page_number,
+                max_page,
+                len(candidates),
+            )
 
         return candidates
 
