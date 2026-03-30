@@ -79,6 +79,7 @@ Recommended flow:
 - if already downloaded, it skips
 - if found and downloadable on Soundeo, it stars
 - if found but only vote-able, it votes
+- if vote is blocked by account limits or premium restrictions, it keeps the track on waitlist for later retry instead of treating it as a hard failure
 - if not found, it stores a local waitlist entry
 
 Suggested first real run:
@@ -91,10 +92,12 @@ Important matching rules:
 - artist overlap is required
 - main track title must also match closely
 - `extended`, `original`, `remix`, `edit` act as supporting hints, not as the main match signal
+- `original` should not match into a remix/edit-only candidate, and remix/edit tracks should not collapse into plain original versions
 - if a candidate is weak or ambiguous, the track should go to waitlist rather than to favorites
 
 Important download protection:
 - a track is treated as already downloaded if either its normalized key or the matched Soundeo `track_id` exists in `downloads_cache`
+- downloaded-key normalization folds common punctuation and diacritics such as `Cafe`/`Café` and straight/curly quotes
 - because of that, running `sync-downloads-cache` before `full-sync` is strongly recommended
 
 ## Spotify setup
@@ -151,6 +154,12 @@ One-shot run through Docker:
 
 ```bash
 docker compose run --rm app python -m app daily-sync
+```
+
+If you changed Python code locally, rebuild the image before relying on new behavior:
+
+```bash
+docker compose build
 ```
 
 Manual runs:
@@ -231,7 +240,9 @@ Current behavior:
 - search uses the global Soundeo search field
 - favorites are used for tracks you want to download later
 - votes are used for tracks that exist but are not yet downloadable
+- vote-limit or premium-blocked tracks are returned to waitlist for retry on later runs
 - downloads cache is parsed from `https://soundeo.com/account/downloads`
 - error screenshots and HTML dumps are written into `artifacts/`
+- `problem_tracks` in reports are written in a human-readable `Artist - Title [spotify_track_id]` form
 
 If you already have a prepared Python environment on the server, you can run directly with `PYTHONPATH=src python3 -m app ...` and skip editable install for the first smoke test.
