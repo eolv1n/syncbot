@@ -1,10 +1,9 @@
 [Unit]
-Description=Daily Spotify to Soundeo sync timer
+Description=Twice-weekly Spotify to Soundeo sync timer
 
 [Timer]
-OnCalendar=*-*-* 03:15:00
+OnCalendar=Tue,Fri *-*-* 19:00:00
 Persistent=true
 
 [Install]
 WantedBy=timers.target
-

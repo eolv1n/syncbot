@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from app.models import NormalizedTrack, SpotifyTrack
 
@@ -12,12 +13,16 @@ NOISE_PATTERNS = [
 ]
 
 REMIX_PATTERN = re.compile(r"\(([^)]*(mix|edit|remix|version|vip)[^)]*)\)", re.IGNORECASE)
+SUFFIX_REMIX_PATTERN = re.compile(r"\s[-–]\s([^()]*\b(mix|edit|remix|version|vip|rework)\b[^()]*)$", re.IGNORECASE)
 
 
 def _clean_piece(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(char for char in value if not unicodedata.combining(char))
     value = value.casefold()
     value = value.replace("&", " and ")
-    value = re.sub(r"[\[\]{}()\-_/,:;.!?]+", " ", value)
+    value = re.sub(r"[`'’‘\"“”]+", "", value)
+    value = re.sub(r"[\[\]{}()\-_/,:;.!?+]+", " ", value)
     for pattern in NOISE_PATTERNS:
         value = re.sub(pattern, " ", value, flags=re.IGNORECASE)
     value = re.sub(r"\s+", " ", value).strip()
@@ -25,7 +30,7 @@ def _clean_piece(value: str) -> str:
 
 
 def extract_remix(value: str) -> str | None:
-    match = REMIX_PATTERN.search(value)
+    match = REMIX_PATTERN.search(value) or SUFFIX_REMIX_PATTERN.search(value)
     if not match:
         return None
     remix = _clean_piece(match.group(1))

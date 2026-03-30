@@ -1,1 +1,1 @@
-15 3 * * * cd /opt/spotify-soundeo-sync && ./.venv/bin/python -m app daily-sync >> logs/cron.log 2>&1
+0 19 * * 2,5 cd /opt/spotify-soundeo-sync && docker compose run --rm app python -m app daily-sync >> logs/cron.log 2>&1

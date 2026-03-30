@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from difflib import SequenceMatcher
 
-from app.matching.normalizer import normalize_text, normalize_track
+from app.matching.normalizer import extract_remix, normalize_text, normalize_track
 from app.models import MatchResult, SoundeoCandidate, SpotifyTrack
 
 
@@ -59,7 +59,50 @@ def _compatibility_gate(track: SpotifyTrack, candidate: SoundeoCandidate) -> boo
     normalized = normalize_track(track)
     candidate_artist = normalize_text(candidate.artists)
     candidate_title = normalize_text(candidate.title)
-    return _artist_gate(normalized.artist, candidate_artist) and _title_gate(normalized.title, candidate_title)
+    return (
+        _artist_gate(normalized.artist, candidate_artist)
+        and _title_gate(normalized.title, candidate_title)
+        and _variant_gate(normalized.remix, candidate)
+    )
+
+
+def _variant_kind(value: str | None) -> str:
+    if not value:
+        return "none"
+    normalized = normalize_text(value)
+    if "original" in normalized and not any(token in normalized for token in ("remix", "edit", "rework", "vip")):
+        return "original"
+    return "alternate"
+
+
+def _candidate_variant(candidate: SoundeoCandidate) -> str | None:
+    variant = extract_remix(candidate.title)
+    if variant:
+        return variant
+    for label in candidate.extra_labels:
+        variant = extract_remix(label)
+        if variant:
+            return variant
+        normalized_label = normalize_text(label)
+        if any(token in normalized_label for token in ("mix", "edit", "remix", "version", "vip", "rework")):
+            return normalized_label
+    return None
+
+
+def _variant_gate(track_variant: str | None, candidate: SoundeoCandidate) -> bool:
+    candidate_variant = _candidate_variant(candidate)
+    track_kind = _variant_kind(track_variant)
+    candidate_kind = _variant_kind(candidate_variant)
+
+    if track_kind in {"none", "original"} and candidate_kind == "alternate":
+        return False
+    if track_kind == "alternate" and candidate_kind in {"none", "original"}:
+        return False
+    if track_kind == "alternate" and candidate_kind == "alternate":
+        track_tokens = _significant_tokens(normalize_text(track_variant or ""))
+        candidate_tokens = _significant_tokens(normalize_text(candidate_variant or ""))
+        return bool(track_tokens & candidate_tokens)
+    return True
 
 
 def score_candidate(track: SpotifyTrack, candidate: SoundeoCandidate) -> float:

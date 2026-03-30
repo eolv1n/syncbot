@@ -2,11 +2,11 @@
 Description=Spotify to Soundeo sync service
 After=network-online.target
 Wants=network-online.target
+Requires=docker.service
+After=docker.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/spotify-soundeo-sync
-EnvironmentFile=/opt/spotify-soundeo-sync/.env
-ExecStart=/opt/spotify-soundeo-sync/.venv/bin/python -m app daily-sync
+ExecStart=/usr/bin/docker compose run --rm app python -m app daily-sync
 Restart=no
-

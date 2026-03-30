@@ -92,12 +92,21 @@ class SoundeoAutomation:
                 self._wait_after_action()
                 if self._is_voted(row):
                     return TrackStatus.LIKED_WAITING_AVAILABILITY
+                blocked = self._vote_blocked_status(row.inner_text(timeout=1_000))
+                if blocked is not None:
+                    return blocked
             if match.candidate.url:
                 page.goto(match.candidate.url, wait_until="domcontentloaded")
                 if self._try_click(page, [".soundtrack_vote button", ".vote button.ico", ".vote button"]):
                     self._wait_after_action()
                     if self._page_is_voted(page):
                         return TrackStatus.LIKED_WAITING_AVAILABILITY
+                    blocked = self._vote_blocked_status(page.content())
+                    if blocked is not None:
+                        return blocked
+            blocked = self._vote_blocked_status(page.content())
+            if blocked is not None:
+                return blocked
             return TrackStatus.ERROR
         if action_type == ActionType.WAITLIST_ADD:
             return TrackStatus.NOT_FOUND_WAITLIST
@@ -451,6 +460,14 @@ class SoundeoAutomation:
             return "voted" in classes.split()
         except Exception:
             return False
+
+    def _vote_blocked_status(self, text: str) -> TrackStatus | None:
+        normalized = text.casefold()
+        if "premium" in normalized and any(token in normalized for token in ("vote", "voting", "available")):
+            return TrackStatus.PREMIUM_REQUIRED
+        if any(phrase in normalized for phrase in ("3 votes per day", "3 vote per day", "daily vote limit", "limit reached")):
+            return TrackStatus.LIKE_LIMIT_REACHED
+        return None
 
     def to_download_cache_rows(self, candidates: list[SoundeoCandidate]) -> list[tuple[str, str, str | None]]:
         rows: list[tuple[str, str, str | None]] = []

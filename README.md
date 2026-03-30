@@ -75,7 +75,7 @@ python -m app dry-run
 
 Recommended flow:
 - `sync-downloads-cache` builds a local cache of all Soundeo downloaded tracks
-- `daily-sync` checks fresh Spotify likes against that cache first
+- `daily-sync` retries due waitlist entries first, then checks fresh Spotify likes against the cache
 - if already downloaded, it skips
 - if found and downloadable on Soundeo, it stars
 - if found but only vote-able, it votes
@@ -147,6 +147,12 @@ Daily run as a long-lived container:
 docker compose --profile scheduler up -d scheduler
 ```
 
+One-shot run through Docker:
+
+```bash
+docker compose run --rm app python -m app daily-sync
+```
+
 Manual runs:
 
 ```bash
@@ -201,10 +207,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now spotify-soundeo-sync.timer
 ```
 
+The provided unit runs a one-shot Docker task and exits after completion. The timer schedule is Tuesday and Friday at `19:00`.
+
 ## Cron example
 
 ```bash
-15 3 * * * cd /opt/spotify-soundeo-sync && ./.venv/bin/python -m app daily-sync >> logs/cron.log 2>&1
+0 19 * * 2,5 cd /opt/spotify-soundeo-sync && docker compose run --rm app python -m app daily-sync >> logs/cron.log 2>&1
 ```
 
 ## Docker

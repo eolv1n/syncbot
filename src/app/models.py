@@ -9,6 +9,8 @@ class TrackStatus(StrEnum):
     DOWNLOADED_ALREADY = "downloaded_already"
     STARRED = "starred"
     LIKED_WAITING_AVAILABILITY = "liked_waiting_availability"
+    LIKE_LIMIT_REACHED = "like_limit_reached"
+    PREMIUM_REQUIRED = "premium_required"
     NOT_FOUND_WAITLIST = "not_found_waitlist"
     SKIPPED = "skipped"
     ERROR = "error"
@@ -78,4 +80,3 @@ class RunSummary:
     waitlisted: int = 0
     errors: int = 0
     problem_tracks: list[str] = field(default_factory=list)
-
