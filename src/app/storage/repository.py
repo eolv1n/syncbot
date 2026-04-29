@@ -176,6 +176,21 @@ class SyncRepository:
             )
         return len(candidates)
 
+    def upsert_downloads_cache(self, candidates: list[tuple[str, str, str | None]]) -> int:
+        with self.connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO downloads_cache(soundeo_track_id, normalized_track_key, downloaded_at, source)
+                VALUES (?, ?, ?, 'parsed_from_downloaded_page_preflight')
+                ON CONFLICT(soundeo_track_id) DO UPDATE SET
+                    normalized_track_key = excluded.normalized_track_key,
+                    downloaded_at = excluded.downloaded_at,
+                    source = excluded.source
+                """,
+                candidates,
+            )
+        return len(candidates)
+
     def is_track_downloaded(self, normalized_track_key: str) -> bool:
         with self.connection() as conn:
             row = conn.execute(

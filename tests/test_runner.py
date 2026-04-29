@@ -48,6 +48,7 @@ class RunnerTests(unittest.TestCase):
             runner.repository.set_state = MagicMock()
             runner.repository.export_summary = MagicMock(return_value=settings.reports_dir / "summary.json")
             runner.soundeo.close = MagicMock()
+            runner._refresh_recent_downloads_cache = MagicMock(return_value=0)  # type: ignore[method-assign]
             runner.spotify.get_liked_tracks = MagicMock(side_effect=[[due_track, fresh_track], [due_track, fresh_track]])
 
             processed_batches: list[list[str]] = []
@@ -61,6 +62,7 @@ class RunnerTests(unittest.TestCase):
             exit_code = runner.run("daily-sync")
 
             self.assertEqual(exit_code, 0)
+            runner._refresh_recent_downloads_cache.assert_called_once()
             self.assertEqual(processed_batches, [["due-track"], ["fresh-track"]])
             self.assertEqual(runner.spotify.get_liked_tracks.call_count, 2)
             self.assertIsNone(runner.spotify.get_liked_tracks.call_args_list[0].kwargs.get("after"))
@@ -68,6 +70,27 @@ class RunnerTests(unittest.TestCase):
                 runner.spotify.get_liked_tracks.call_args_list[1].kwargs.get("after"),
                 datetime(2025, 12, 31, tzinfo=UTC),
             )
+
+    def test_downloads_preflight_upserts_first_downloads_page(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            _, runner = self._make_runner(tmpdir)
+            candidate = SoundeoCandidate(
+                soundeo_track_id="soundeo-downloaded",
+                title="Track Name",
+                artists="Artist Name",
+                is_downloaded=True,
+            )
+            rows = [("soundeo-downloaded", "artist name track name", None)]
+
+            runner.soundeo.refresh_recent_downloaded_cache = MagicMock(return_value=[candidate])
+            runner.soundeo.to_download_cache_rows = MagicMock(return_value=rows)
+
+            cached = runner._refresh_recent_downloads_cache()
+
+            self.assertEqual(cached, 1)
+            runner.soundeo.refresh_recent_downloaded_cache.assert_called_once_with()
+            runner.soundeo.to_download_cache_rows.assert_called_once_with([candidate])
+            self.assertTrue(runner.repository.is_soundeo_track_downloaded("soundeo-downloaded"))
 
     def test_like_limit_goes_to_waitlist_instead_of_error(self) -> None:
         with TemporaryDirectory() as tmpdir:

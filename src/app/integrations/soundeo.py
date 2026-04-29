@@ -5,6 +5,7 @@ import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlencode
 
 from app.config import AppSettings
 from app.matching.normalizer import build_normalized_track_key, extract_remix
@@ -39,6 +40,18 @@ class SoundeoAutomation:
             mark_downloaded=True,
         )
 
+    def refresh_recent_downloaded_cache(self) -> list[SoundeoCandidate]:
+        page = self._ensure_page()
+        if page is None:
+            LOGGER.info("Downloaded cache preflight is scaffolded and requires Playwright credentials.")
+            return []
+
+        self._ensure_logged_in(page)
+        LOGGER.info("Refreshing first Soundeo downloads page from %s", self.settings.soundeo_downloads_url)
+        page.goto(self.settings.soundeo_downloads_url, wait_until="domcontentloaded")
+        self._wait_after_action()
+        return self._extract_candidates(page, mark_downloaded=True, max_results=None)
+
     def search_track(self, normalized: NormalizedTrack) -> list[SoundeoCandidate]:
         LOGGER.info("Searching Soundeo for '%s'", normalized.normalized_query)
         page = self._ensure_page()
@@ -48,12 +61,11 @@ class SoundeoAutomation:
 
         for attempt in range(2):
             self._ensure_logged_in(page)
-            page.goto(self.settings.soundeo_search_url, wait_until="domcontentloaded")
-            search_input = page.locator("input[placeholder='Search']").first
             try:
-                search_input.wait_for(timeout=10_000)
-                search_input.fill(normalized.normalized_query)
-                search_input.press("Enter")
+                page.goto(
+                    self._search_url(normalized.normalized_query),
+                    wait_until="domcontentloaded",
+                )
                 self._wait_after_action()
                 return self._extract_candidates(page, max_results=self.settings.soundeo_max_results)
             except Exception:
@@ -145,16 +157,15 @@ class SoundeoAutomation:
         self._browser = self._playwright.chromium.launch(headless=self.settings.soundeo_headless)
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
-        self._page.set_default_timeout(10_000)
+        self._page.set_default_timeout(20_000)
+        self._page.set_default_navigation_timeout(20_000)
         return self._page
 
     def _ensure_logged_in(self, page: Page) -> None:
         if self._logged_in:
             return
 
-        page.goto(self.settings.soundeo_login_url, wait_until="domcontentloaded")
-        if self._is_not_found_page(page):
-            page.goto(self.settings.soundeo_base_url, wait_until="domcontentloaded")
+        self._goto_login_entry(page)
         if self._is_logged_in(page):
             self._logged_in = True
             return
@@ -165,6 +176,12 @@ class SoundeoAutomation:
         self._open_login_dialog(page)
         email_input = self._locate_login_input(page)
         password_input = self._locate_password_input(page)
+        if email_input is None or password_input is None:
+            LOGGER.info("Soundeo login form was not found at %s; retrying from base URL.", page.url)
+            page.goto(self.settings.soundeo_base_url, wait_until="domcontentloaded")
+            self._open_login_dialog(page)
+            email_input = self._locate_login_input(page)
+            password_input = self._locate_password_input(page)
 
         if email_input is None or password_input is None:
             self.capture_failure_artifacts("soundeo-login-missing-inputs", page.content())
@@ -398,6 +415,12 @@ class SoundeoAutomation:
         artists, title = value.split(" - ", 1)
         return artists.strip(), title.strip()
 
+    def _search_url(self, query: str) -> str:
+        base_url = self.settings.soundeo_search_url.rstrip("/")
+        if base_url.endswith("/search"):
+            return f"{base_url}?{urlencode({'q': query})}"
+        return f"{self.settings.soundeo_base_url.rstrip('/')}/search?{urlencode({'q': query})}"
+
     def _soundeo_track_id(self, url: str, fallback: str) -> str:
         tail = url.rstrip("/").rsplit("/", 1)[-1]
         return tail or fallback
@@ -493,10 +516,22 @@ class SoundeoAutomation:
         )
         if login_toggle is not None:
             login_toggle.click()
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=3_000)
+            except Exception:
+                pass
             self._wait_after_action()
+
+    def _goto_login_entry(self, page: Page) -> None:
+        page.goto(self.settings.soundeo_login_url, wait_until="domcontentloaded")
+        if self._is_not_found_page(page):
+            page.goto(self.settings.soundeo_base_url, wait_until="domcontentloaded")
 
     def _locate_login_input(self, page: Page):
         selectors = [
+            "#UserLogin",
+            "input[name='data[User][login]']",
+            "input.username",
             "input[type='email']",
             "input[name='email']",
             "input[placeholder*='mail' i]",
@@ -508,6 +543,9 @@ class SoundeoAutomation:
 
     def _locate_password_input(self, page: Page):
         selectors = [
+            "#UserPassword",
+            "input[name='data[User][password]']",
+            "input.password",
             "input[type='password']",
             "input[name='password']",
         ]

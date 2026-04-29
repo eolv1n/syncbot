@@ -28,9 +28,11 @@ class SyncRunner:
             if mode == "sync-downloads-cache":
                 self._sync_downloads_cache(summary)
             elif mode in {"initial-sync", "full-sync"}:
+                self._refresh_recent_downloads_cache()
                 self._run_tracks(self.spotify.get_liked_tracks(), summary)
                 self.repository.set_state("last_full_sync_at", summary.started_at.isoformat())
             elif mode == "daily-sync":
+                self._refresh_recent_downloads_cache()
                 after = self._daily_after()
                 retried_track_ids = self._retry_waitlist(summary)
                 fresh_tracks = [
@@ -41,10 +43,12 @@ class SyncRunner:
                 self._run_tracks(fresh_tracks, summary)
                 self.repository.set_state("last_daily_sync_at", datetime.now(UTC).isoformat())
             elif mode == "retry-waitlist":
+                self._refresh_recent_downloads_cache()
                 self._retry_waitlist(summary)
             elif mode == "dry-run":
                 previous = self.settings.dry_run
                 self.settings.dry_run = True
+                self._refresh_recent_downloads_cache()
                 self._run_tracks(self.spotify.get_liked_tracks(after=self._daily_after()), summary)
                 self.settings.dry_run = previous
             else:
@@ -62,6 +66,14 @@ class SyncRunner:
         report_path = self.repository.export_summary(self.settings, summary)
         print_summary(summary, report_path)
         return 0
+
+    def _refresh_recent_downloads_cache(self) -> int:
+        LOGGER.info("Refreshing first Soundeo downloads page before track processing.")
+        candidates = self.soundeo.refresh_recent_downloaded_cache()
+        rows = self.soundeo.to_download_cache_rows(candidates)
+        cached = self.repository.upsert_downloads_cache(rows)
+        LOGGER.info("Soundeo downloads preflight completed: %s recent cached tracks upserted.", cached)
+        return cached
 
     def _last_daily_sync(self) -> datetime | None:
         value = self.repository.get_state("last_daily_sync_at")
