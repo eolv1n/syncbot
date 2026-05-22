@@ -44,6 +44,17 @@ class SyncRepository:
     def _initialize(self) -> None:
         with self.connection() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._ensure_column(conn, "spotify_tracks", "release_date", "TEXT")
+            self._ensure_column(conn, "soundeo_matches", "soundeo_release_name", "TEXT")
+            self._ensure_column(conn, "soundeo_matches", "soundeo_release_date", "TEXT")
+            self._ensure_column(conn, "waitlist", "review_status", "TEXT NOT NULL DEFAULT 'active'")
+            self._ensure_column(conn, "waitlist", "manual_review_reason", "TEXT")
+            self._ensure_column(conn, "waitlist", "reviewed_at", "TEXT")
+
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def get_state(self, key: str) -> str | None:
         with self.connection() as conn:
@@ -71,12 +82,14 @@ class SyncRepository:
             conn.execute(
                 """
                 INSERT INTO spotify_tracks(
-                    spotify_track_id, isrc, artists_raw, title_raw, normalized_query, added_at, first_seen_at, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    spotify_track_id, isrc, artists_raw, title_raw, release_date,
+                    normalized_query, added_at, first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(spotify_track_id) DO UPDATE SET
                     isrc = excluded.isrc,
                     artists_raw = excluded.artists_raw,
                     title_raw = excluded.title_raw,
+                    release_date = excluded.release_date,
                     normalized_query = excluded.normalized_query,
                     added_at = excluded.added_at,
                     last_seen_at = excluded.last_seen_at
@@ -86,6 +99,7 @@ class SyncRepository:
                     track.isrc,
                     track.artists_raw,
                     track.title_raw,
+                    track.release_date,
                     normalized.normalized_query,
                     track.added_at.isoformat(),
                     now,
@@ -99,11 +113,14 @@ class SyncRepository:
             conn.execute(
                 """
                 INSERT INTO soundeo_matches(
-                    spotify_track_id, soundeo_track_id, soundeo_url, match_score, match_type,
+                    spotify_track_id, soundeo_track_id, soundeo_url,
+                    soundeo_release_name, soundeo_release_date, match_score, match_type,
                     availability_status, downloaded_flag, last_checked_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(spotify_track_id, soundeo_track_id) DO UPDATE SET
                     soundeo_url = excluded.soundeo_url,
+                    soundeo_release_name = excluded.soundeo_release_name,
+                    soundeo_release_date = excluded.soundeo_release_date,
                     match_score = excluded.match_score,
                     match_type = excluded.match_type,
                     availability_status = excluded.availability_status,
@@ -114,6 +131,8 @@ class SyncRepository:
                     spotify_track_id,
                     match.candidate.soundeo_track_id if match.candidate else None,
                     match.candidate.url if match.candidate else None,
+                    match.candidate.release_name if match.candidate else None,
+                    match.candidate.release_date if match.candidate else None,
                     match.score,
                     match.match_type,
                     status.value,
@@ -155,14 +174,101 @@ class SyncRepository:
                 (spotify_track_id, reason.value, next_retry.isoformat(), now.isoformat()),
             )
 
+    def clear_waitlist(self, spotify_track_id: str) -> None:
+        with self.connection() as conn:
+            conn.execute("DELETE FROM waitlist WHERE spotify_track_id = ?", (spotify_track_id,))
+
     def get_waitlist_tracks_due(self) -> list[str]:
         now = datetime.now(UTC).isoformat()
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT spotify_track_id FROM waitlist WHERE next_retry_at <= ? ORDER BY next_retry_at ASC",
+                """
+                SELECT spotify_track_id
+                FROM waitlist
+                WHERE next_retry_at <= ?
+                  AND review_status = 'active'
+                ORDER BY next_retry_at ASC
+                """,
                 (now,),
             ).fetchall()
         return [row["spotify_track_id"] for row in rows]
+
+    def waitlist_report(self, older_than_days: int | None = None, status: str | None = None) -> list[dict[str, object]]:
+        params: list[object] = []
+        filters: list[str] = []
+        if older_than_days is not None:
+            cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+            filters.append("s.added_at < ?")
+            params.append(cutoff.isoformat())
+        if status is not None:
+            filters.append("w.review_status = ?")
+            params.append(status)
+
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        query = f"""
+            SELECT
+                w.spotify_track_id,
+                s.artists_raw,
+                s.title_raw,
+                s.release_date,
+                s.added_at,
+                w.reason,
+                w.retry_count,
+                w.next_retry_at,
+                w.last_retry_at,
+                w.review_status,
+                w.manual_review_reason,
+                w.reviewed_at,
+                (
+                    SELECT sm.match_type || ':' || printf('%.1f', sm.match_score)
+                    FROM soundeo_matches sm
+                    WHERE sm.spotify_track_id = w.spotify_track_id
+                    ORDER BY sm.last_checked_at DESC
+                    LIMIT 1
+                ) AS last_match,
+                (
+                    SELECT sm.soundeo_release_name
+                    FROM soundeo_matches sm
+                    WHERE sm.spotify_track_id = w.spotify_track_id
+                    ORDER BY sm.last_checked_at DESC
+                    LIMIT 1
+                ) AS last_match_release_name,
+                (
+                    SELECT sm.soundeo_release_date
+                    FROM soundeo_matches sm
+                    WHERE sm.spotify_track_id = w.spotify_track_id
+                    ORDER BY sm.last_checked_at DESC
+                    LIMIT 1
+                ) AS last_match_release_date
+            FROM waitlist w
+            JOIN spotify_tracks s ON s.spotify_track_id = w.spotify_track_id
+            {where}
+            ORDER BY s.added_at ASC, w.retry_count DESC
+        """
+        with self.connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_old_waitlist_for_manual_review(self, older_than_days: int, reason: str) -> int:
+        cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
+        now = datetime.now(UTC).isoformat()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE waitlist
+                SET review_status = 'manual_review',
+                    manual_review_reason = ?,
+                    reviewed_at = ?
+                WHERE review_status = 'active'
+                  AND spotify_track_id IN (
+                    SELECT spotify_track_id
+                    FROM spotify_tracks
+                    WHERE added_at < ?
+                  )
+                """,
+                (reason, now, cutoff.isoformat()),
+            )
+            return cursor.rowcount
 
     def replace_downloads_cache(self, candidates: list[tuple[str, str, str | None]]) -> int:
         with self.connection() as conn:

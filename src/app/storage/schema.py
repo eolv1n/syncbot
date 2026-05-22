@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS spotify_tracks (
     isrc TEXT,
     artists_raw TEXT NOT NULL,
     title_raw TEXT NOT NULL,
+    release_date TEXT,
     normalized_query TEXT NOT NULL,
     added_at TEXT NOT NULL,
     first_seen_at TEXT NOT NULL,
@@ -14,6 +15,8 @@ CREATE TABLE IF NOT EXISTS soundeo_matches (
     spotify_track_id TEXT NOT NULL,
     soundeo_track_id TEXT,
     soundeo_url TEXT,
+    soundeo_release_name TEXT,
+    soundeo_release_date TEXT,
     match_score REAL NOT NULL,
     match_type TEXT NOT NULL,
     availability_status TEXT NOT NULL,
@@ -39,6 +42,9 @@ CREATE TABLE IF NOT EXISTS waitlist (
     retry_count INTEGER NOT NULL DEFAULT 0,
     next_retry_at TEXT NOT NULL,
     last_retry_at TEXT,
+    review_status TEXT NOT NULL DEFAULT 'active',
+    manual_review_reason TEXT,
+    reviewed_at TEXT,
     FOREIGN KEY (spotify_track_id) REFERENCES spotify_tracks (spotify_track_id)
 );
 
@@ -54,4 +60,3 @@ CREATE TABLE IF NOT EXISTS sync_state (
     value TEXT NOT NULL
 );
 """
-

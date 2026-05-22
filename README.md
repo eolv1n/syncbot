@@ -4,7 +4,8 @@ Production-oriented sync tool for mirroring Spotify liked tracks into Soundeo ac
 
 ## What is ready
 
-- CLI modes: `sync-downloads-cache`, `full-sync`, `daily-sync`, `retry-waitlist`, `dry-run`
+- CLI modes: `sync-downloads-cache`, `refresh-spotify-metadata`, `sync-track-ids`, `full-sync`, `fresh-sync`, `daily-sync`, `retry-waitlist`, `dry-run`
+- Waitlist maintenance modes: `waitlist-report`, `mark-old-waitlist-manual-review`
 - SQLite state storage and JSON run reports
 - Spotify OAuth with local token cache
 - Soundeo login, search, favorites, votes, and downloads-page parsing
@@ -65,22 +66,41 @@ deploy/
 ```bash
 python -m app initial-sync
 python -m app sync-downloads-cache
+python -m app sync-track-ids <SPOTIFY_TRACK_ID> [SPOTIFY_TRACK_ID...]
 python -m app full-sync
+python -m app fresh-sync
 python -m app daily-sync
 python -m app retry-waitlist
 python -m app dry-run
+python -m app waitlist-report
+python -m app refresh-spotify-metadata
+python -m app mark-old-waitlist-manual-review --older-than-days 365
 ```
 
-`daily-sync` and `dry-run` only process fresh tracks. On the very first run without a saved cursor they use the recent window from `SPOTIFY_RECENT_DAYS_ON_FIRST_SYNC`. Use `full-sync` for a full historical pass.
+`fresh-sync`, `daily-sync`, and `dry-run` process fresh tracks. On the very first run without a saved cursor they use the recent window from `SPOTIFY_RECENT_DAYS_ON_FIRST_SYNC`. Use `full-sync` for a full historical pass.
 
 Recommended flow:
 - `sync-downloads-cache` builds a local cache of all Soundeo downloaded tracks
+- `refresh-spotify-metadata` refreshes local Spotify track metadata, including release dates, without opening Soundeo or applying actions
+- `sync-track-ids` checks only explicit Spotify liked track ids and does not move the daily cursor
+- `fresh-sync` checks only fresh Spotify likes since the last daily cursor and does not retry waitlist
 - `daily-sync` retries due waitlist entries first, then checks fresh Spotify likes against the cache
+- `manual_review` waitlist entries are excluded from automatic retry and are intended for human review
 - if already downloaded, it skips
 - if found and downloadable on Soundeo, it stars
 - if found but only vote-able, it votes
 - if vote is blocked by account limits or premium restrictions, it keeps the track on waitlist for later retry instead of treating it as a hard failure
 - if not found, it stores a local waitlist entry
+
+Old waitlist maintenance:
+
+```bash
+python -m app waitlist-report --older-than-days 365 --status active
+python -m app mark-old-waitlist-manual-review --older-than-days 365
+python -m app mark-old-waitlist-manual-review --older-than-days 365 --apply
+```
+
+The apply command does not delete tracks. It marks active old waitlist rows as `manual_review`, so normal `daily-sync` stops retrying them every run while preserving them for a selective review UI or manual investigation.
 
 Suggested first real run:
 - `sync-downloads-cache` once to cache the whole Soundeo downloads history
@@ -91,8 +111,12 @@ Important matching rules:
 - Spotify source is only `Liked Songs` / saved tracks
 - artist overlap is required
 - main track title must also match closely
-- `extended`, `original`, `remix`, `edit` act as supporting hints, not as the main match signal
-- `original` should not match into a remix/edit-only candidate, and remix/edit tracks should not collapse into plain original versions
+- `original`, `extended`, and `edit` are treated as compatible base versions of the same track
+- named remixes and named mixes are not allowed to collapse into base versions or unrelated remixes
+- Spotify album release year is used as a supporting match hint when Soundeo exposes a year in candidate text
+- when both Spotify and Soundeo expose release years, candidates outside the configured tolerance are rejected before scoring
+- Soundeo release name/date from matched rows is stored in `soundeo_matches` and surfaced in waitlist reports for manual review
+- release year/date is never appended to Soundeo search queries; it is only used after candidates are collected
 - if a candidate is weak or ambiguous, the track should go to waitlist rather than to favorites
 
 Important download protection:
@@ -153,6 +177,7 @@ docker compose --profile scheduler up -d scheduler
 One-shot run through Docker:
 
 ```bash
+docker compose run --rm app python -m app fresh-sync
 docker compose run --rm app python -m app daily-sync
 ```
 
@@ -167,10 +192,13 @@ Manual runs:
 ```bash
 docker compose run --rm app python -m app initial-sync
 docker compose run --rm app python -m app sync-downloads-cache
+docker compose run --rm app python -m app sync-track-ids <SPOTIFY_TRACK_ID> [SPOTIFY_TRACK_ID...]
 docker compose run --rm app python -m app full-sync
+docker compose run --rm app python -m app fresh-sync
 docker compose run --rm app python -m app daily-sync
 docker compose run --rm app python -m app retry-waitlist
 docker compose run --rm app python -m app dry-run
+docker compose run --rm app python -m app refresh-spotify-metadata
 ```
 
 For large Soundeo history imports you can speed up the cache build:

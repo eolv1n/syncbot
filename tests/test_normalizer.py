@@ -21,6 +21,9 @@ class NormalizerTests(unittest.TestCase):
     def test_extract_remix_from_dash_suffix(self) -> None:
         self.assertEqual(extract_remix("Life Cycle - 4x4 Mix"), "4x4 mix")
 
+    def test_extract_remix_before_trailing_mixed_suffix(self) -> None:
+        self.assertEqual(extract_remix("Mi Zone - Amour Propre Remix - Mixed"), "amour propre remix")
+
     def test_normalize_track_removes_noise(self) -> None:
         normalized = normalize_track(make_track("Track Name (Original Mix) feat. Guest"))
         self.assertEqual(normalized.artist, "artist name")
@@ -36,6 +39,16 @@ class NormalizerTests(unittest.TestCase):
         spotify_key = normalize_track(make_track("Pulsar", artists="DJ Kon'")).normalized_query
         soundeo_key = build_normalized_track_key("DJ Kon’", "Pulsar", None)
         self.assertEqual(spotify_key, soundeo_key)
+
+    def test_normalize_artist_initialism(self) -> None:
+        normalized = normalize_track(make_track("Changes", artists="M.O.S."))
+        self.assertEqual(normalized.artist, "mos")
+        self.assertEqual(normalized.normalized_query, "mos changes")
+
+    def test_normalize_track_removes_mixed_noise_after_remix(self) -> None:
+        normalized = normalize_track(make_track("Mi Zone - Amour Propre Remix - Mixed"))
+        self.assertEqual(normalized.title, "mi zone")
+        self.assertEqual(normalized.remix, "amour propre remix")
 
 
 if __name__ == "__main__":

@@ -27,10 +27,16 @@ class SyncRunner:
         try:
             if mode == "sync-downloads-cache":
                 self._sync_downloads_cache(summary)
+            elif mode == "refresh-spotify-metadata":
+                self._refresh_spotify_metadata(summary)
             elif mode in {"initial-sync", "full-sync"}:
                 self._refresh_recent_downloads_cache()
                 self._run_tracks(self.spotify.get_liked_tracks(), summary)
                 self.repository.set_state("last_full_sync_at", summary.started_at.isoformat())
+            elif mode == "fresh-sync":
+                self._refresh_recent_downloads_cache()
+                self._run_tracks(self.spotify.get_liked_tracks(after=self._daily_after()), summary)
+                self.repository.set_state("last_daily_sync_at", datetime.now(UTC).isoformat())
             elif mode == "daily-sync":
                 self._refresh_recent_downloads_cache()
                 after = self._daily_after()
@@ -55,6 +61,31 @@ class SyncRunner:
                 raise ValueError(f"Unsupported mode: {mode}")
         except Exception as exc:
             LOGGER.exception("Sync failed: %s", exc)
+            summary.errors += 1
+            summary.problem_tracks.append(str(exc))
+            report_path = self.repository.export_summary(self.settings, summary)
+            print_summary(summary, report_path)
+            return 1
+        finally:
+            self.soundeo.close()
+
+        report_path = self.repository.export_summary(self.settings, summary)
+        print_summary(summary, report_path)
+        return 0
+
+    def run_track_ids(self, track_ids: set[str]) -> int:
+        summary = RunSummary(mode="sync-track-ids")
+        try:
+            self._refresh_recent_downloads_cache()
+            tracks = [track for track in self.spotify.get_liked_tracks() if track.spotify_track_id in track_ids]
+            found_ids = {track.spotify_track_id for track in tracks}
+            missing_ids = sorted(track_ids - found_ids)
+            if missing_ids:
+                summary.errors += len(missing_ids)
+                summary.problem_tracks.extend(f"Spotify liked track id not found: {track_id}" for track_id in missing_ids)
+            self._run_tracks(tracks, summary)
+        except Exception as exc:
+            LOGGER.exception("Targeted track sync failed: %s", exc)
             summary.errors += 1
             summary.problem_tracks.append(str(exc))
             report_path = self.repository.export_summary(self.settings, summary)
@@ -102,6 +133,7 @@ class SyncRunner:
         if self.repository.is_track_downloaded(normalized.normalized_query):
             if not self.settings.dry_run:
                 self.repository.record_action(track.spotify_track_id, ActionType.SKIP, TrackStatus.DOWNLOADED_ALREADY.value)
+                self.repository.clear_waitlist(track.spotify_track_id)
             summary.downloaded_already += 1
             return
 
@@ -120,6 +152,7 @@ class SyncRunner:
             if not self.settings.dry_run:
                 self.repository.record_match(track.spotify_track_id, match, TrackStatus.DOWNLOADED_ALREADY)
                 self.repository.record_action(track.spotify_track_id, ActionType.SKIP, TrackStatus.DOWNLOADED_ALREADY.value)
+                self.repository.clear_waitlist(track.spotify_track_id)
             summary.downloaded_already += 1
             return
 
@@ -127,20 +160,37 @@ class SyncRunner:
             if not self.settings.dry_run:
                 self.repository.record_match(track.spotify_track_id, match, TrackStatus.DOWNLOADED_ALREADY)
                 self.repository.record_action(track.spotify_track_id, ActionType.SKIP, TrackStatus.DOWNLOADED_ALREADY.value)
+                self.repository.clear_waitlist(track.spotify_track_id)
             summary.downloaded_already += 1
             return
 
         if match.candidate.is_available:
-            if not self.repository.was_action_recorded(track.spotify_track_id, ActionType.STAR):
+            if self.repository.was_action_recorded(track.spotify_track_id, ActionType.STAR):
+                if not self.settings.dry_run:
+                    self.repository.clear_waitlist(track.spotify_track_id)
+            else:
                 status = self.soundeo.apply_action(match, ActionType.STAR)
                 if status == TrackStatus.STARRED:
                     if not self.settings.dry_run:
                         self.repository.record_action(track.spotify_track_id, ActionType.STAR, status.value)
                         self.repository.record_match(track.spotify_track_id, match, status)
+                        self.repository.clear_waitlist(track.spotify_track_id)
                     summary.starred += 1
                 elif status == TrackStatus.ERROR:
                     summary.errors += 1
                     summary.problem_tracks.append(self._problem_track_label(track))
+            return
+
+        if not self.settings.soundeo_voting_enabled:
+            if not self.repository.was_action_recorded(track.spotify_track_id, ActionType.LIKE) and not self.settings.dry_run:
+                self.repository.record_action(track.spotify_track_id, ActionType.LIKE, TrackStatus.PREMIUM_REQUIRED.value)
+                self.repository.record_match(track.spotify_track_id, match, TrackStatus.PREMIUM_REQUIRED)
+                self.repository.put_waitlist(
+                    track.spotify_track_id,
+                    WaitlistReason.NOT_AVAILABLE_YET,
+                    self.settings.waitlist_retry_days,
+                )
+                summary.waitlisted += 1
             return
 
         if not self.repository.was_action_recorded(track.spotify_track_id, ActionType.LIKE):
@@ -192,6 +242,15 @@ class SyncRunner:
         LOGGER.info("Soundeo downloads cache sync completed: %s cached tracks written to sqlite.", cached)
         summary.processed = cached
         summary.downloaded_already = cached
+
+    def _refresh_spotify_metadata(self, summary: RunSummary) -> None:
+        LOGGER.info("Refreshing Spotify liked tracks metadata without Soundeo actions.")
+        for track in self.spotify.get_liked_tracks():
+            summary.processed += 1
+            normalized = normalize_track(track)
+            if self.repository.upsert_spotify_track(track, normalized):
+                summary.newly_seen += 1
+        LOGGER.info("Spotify metadata refresh completed: %s tracks processed.", summary.processed)
 
     def _problem_track_label(self, track: SpotifyTrack, detail: str = "") -> str:
         label = f"{track.artists_raw} - {track.title_raw} [{track.spotify_track_id}]"

@@ -55,6 +55,7 @@ class SpotifyClient:
                     reached_older_tracks = True
                     continue
                 track_data = item["track"]
+                album_data = track_data.get("album", {})
                 items.append(
                     SpotifyTrack(
                         spotify_track_id=track_data["id"],
@@ -63,7 +64,8 @@ class SpotifyClient:
                         added_at=added_at,
                         duration_ms=track_data.get("duration_ms"),
                         isrc=track_data.get("external_ids", {}).get("isrc"),
-                        release_name=track_data.get("album", {}).get("name"),
+                        release_name=album_data.get("name"),
+                        release_date=album_data.get("release_date"),
                     )
                 )
 

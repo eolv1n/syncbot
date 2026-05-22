@@ -8,13 +8,24 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 from app.config import AppSettings
-from app.matching.normalizer import build_normalized_track_key, extract_remix
+from app.matching.normalizer import build_normalized_track_key, extract_remix, normalize_text
 from app.models import ActionType, MatchResult, NormalizedTrack, SoundeoCandidate, TrackStatus
 
 LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from playwright.sync_api import Browser, BrowserContext, Page, Playwright
+
+
+SEARCH_PAREN_VARIANT_PATTERN = re.compile(
+    r"\(([^)]*\b(mix|edit|extended|remix|version|vip|rework)\b[^)]*)\)",
+    re.IGNORECASE,
+)
+SEARCH_SUFFIX_VARIANT_PATTERN = re.compile(
+    r"\s[-–]\s([^()]*\b(mix|edit|extended|remix|version|vip|rework)\b[^()]*)$",
+    re.IGNORECASE,
+)
+TRAILING_SEARCH_MIXED_PATTERN = re.compile(r"\s[-–]\s*mixed\s*$", re.IGNORECASE)
 
 
 class SoundeoAutomation:
@@ -59,15 +70,28 @@ class SoundeoAutomation:
             self._wait_after_action()
             return []
 
+        queries = self._search_queries(normalized)
+
+        collected: list[SoundeoCandidate] = []
+        seen_ids: set[str] = set()
         for attempt in range(2):
             self._ensure_logged_in(page)
             try:
-                page.goto(
-                    self._search_url(normalized.normalized_query),
-                    wait_until="domcontentloaded",
-                )
-                self._wait_after_action()
-                return self._extract_candidates(page, max_results=self.settings.soundeo_max_results)
+                for index, query in enumerate(queries):
+                    page.goto(
+                        self._search_url(query),
+                        wait_until="domcontentloaded",
+                    )
+                    self._wait_after_action()
+                    candidates = self._extract_candidates(page, max_results=self.settings.soundeo_max_results)
+                    for candidate in candidates:
+                        if candidate.soundeo_track_id in seen_ids:
+                            continue
+                        seen_ids.add(candidate.soundeo_track_id)
+                        collected.append(candidate)
+                    if not candidates:
+                        LOGGER.info("Soundeo search returned no candidates for fallback query '%s'.", query)
+                return collected
             except Exception:
                 LOGGER.warning("Soundeo search page was not ready on attempt %s for '%s'.", attempt + 1, normalized.normalized_query)
                 self._logged_in = False
@@ -75,6 +99,92 @@ class SoundeoAutomation:
                     raise
                 self._wait_after_action()
         return []
+
+    def _search_queries(self, normalized: NormalizedTrack) -> list[str]:
+        track = normalized.original
+        raw_artist = track.artists_raw.strip()
+        raw_title = track.title_raw.strip()
+        title_queries = self._title_search_candidates(normalized, raw_title)
+        artist_queries = self._artist_search_candidates(raw_artist)
+        simple_query = " ".join(part for part in (normalized.artist, normalized.title) if part).strip()
+        raw_query = " - ".join(part for part in (raw_artist, raw_title) if part).strip()
+        compact_raw_query = self._compact_initialisms(raw_query)
+
+        queries = [
+            normalized.normalized_query,
+            simple_query,
+            raw_query,
+            compact_raw_query,
+        ]
+
+        for title in title_queries:
+            for artist in artist_queries:
+                queries.append(" ".join(part for part in (artist, title) if part).strip())
+                queries.append(" - ".join(part for part in (artist, title) if part).strip())
+
+        remix = normalized.remix or ""
+        remix_identity = self._variant_identity(remix)
+        if remix_identity:
+            queries.append(" ".join(part for part in (remix_identity, normalized.title) if part).strip())
+            queries.append(" - ".join(part for part in (remix_identity, normalized.title, remix_identity) if part).strip())
+
+        return self._dedupe_queries(queries)
+
+    def _artist_search_candidates(self, raw_artist: str) -> list[str]:
+        parts = [
+            part.strip()
+            for part in re.split(r"\s*,\s*|\s+feat\.?\s+|\s+ft\.?\s+", raw_artist, flags=re.IGNORECASE)
+            if part.strip()
+        ]
+        candidates = [raw_artist, *parts]
+        candidates.extend(", ".join(parts[:index]) for index in range(2, len(parts) + 1))
+
+        for part in parts:
+            subparts = [subpart.strip() for subpart in re.split(r"\s+(?:&|and)\s+", part, flags=re.IGNORECASE) if subpart.strip()]
+            if len(subparts) > 1:
+                candidates.extend(subparts)
+
+        for part in parts if len(parts) == 1 else []:
+            tokens = part.split()
+            if len(tokens) == 2 and re.fullmatch(r"[A-Za-z][A-Za-z'’.-]{3,}", tokens[-1]):
+                candidates.append(tokens[-1])
+
+        return self._dedupe_queries(candidates)
+
+    def _title_search_candidates(self, normalized: NormalizedTrack, raw_title: str) -> list[str]:
+        candidates = [self._raw_base_title(raw_title), normalized.title, raw_title]
+        return self._dedupe_queries(candidates)
+
+    def _raw_base_title(self, raw_title: str) -> str:
+        value = TRAILING_SEARCH_MIXED_PATTERN.sub("", raw_title).strip()
+        value = SEARCH_PAREN_VARIANT_PATTERN.sub("", value).strip()
+        value = SEARCH_SUFFIX_VARIANT_PATTERN.sub("", value).strip()
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _compact_initialisms(self, value: str) -> str:
+        def replace(match: re.Match[str]) -> str:
+            return match.group(0).replace(".", "")
+
+        return re.sub(r"\b(?:[A-Za-z]\.){2,}[A-Za-z]?\.?", replace, value)
+
+    def _variant_identity(self, value: str) -> str:
+        normalized = normalize_text(value)
+        generic = {"mix", "edit", "extended", "remix", "version", "vip", "rework", "original", "radio", "album"}
+        return " ".join(token for token in normalized.split() if token not in generic)
+
+    def _dedupe_queries(self, queries: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for query in queries:
+            compact = re.sub(r"\s+", " ", query).strip()
+            if not compact:
+                continue
+            key = compact.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(compact)
+        return result
 
     def apply_action(self, match: MatchResult, action_type: ActionType) -> TrackStatus:
         page = self._ensure_page()
@@ -88,27 +198,37 @@ class SoundeoAutomation:
         row = page.locator(f".trackitem[data-track-id='{match.candidate.soundeo_track_id}']").first
 
         if action_type == ActionType.STAR:
+            if row.count() > 0 and self._is_favorited(row):
+                return TrackStatus.STARRED
             if row.count() > 0 and self._try_click_locator(row.locator("button.favorites").first):
                 self._wait_after_action()
                 if self._is_favorited(row):
                     return TrackStatus.STARRED
             if match.candidate.url:
                 page.goto(match.candidate.url, wait_until="domcontentloaded")
+                if self._page_is_favorited(page):
+                    return TrackStatus.STARRED
                 if self._try_click(page, [".soundtrack_favorites button", "button.favorites"]):
                     self._wait_after_action()
                     if self._page_is_favorited(page):
                         return TrackStatus.STARRED
             return TrackStatus.ERROR
         if action_type == ActionType.LIKE:
+            if row.count() > 0 and self._is_voted(row):
+                return TrackStatus.LIKED_WAITING_AVAILABILITY
             if row.count() > 0 and self._try_click_locator(row.locator(".vote button.ico, .vote button").first):
                 self._wait_after_action()
                 if self._is_voted(row):
                     return TrackStatus.LIKED_WAITING_AVAILABILITY
-                blocked = self._vote_blocked_status(row.inner_text(timeout=1_000))
-                if blocked is not None:
-                    return blocked
+                row_text = self._safe_inner_text(row, timeout=5_000)
+                if row_text:
+                    blocked = self._vote_blocked_status(row_text)
+                    if blocked is not None:
+                        return blocked
             if match.candidate.url:
                 page.goto(match.candidate.url, wait_until="domcontentloaded")
+                if self._page_is_voted(page):
+                    return TrackStatus.LIKED_WAITING_AVAILABILITY
                 if self._try_click(page, [".soundtrack_vote button", ".vote button.ico", ".vote button"]):
                     self._wait_after_action()
                     if self._page_is_voted(page):
@@ -243,6 +363,7 @@ class SoundeoAutomation:
             artists, title = self._split_track_link(title_text)
             row_text = row.inner_text(timeout=1_000)
             labels = [item.strip().casefold() for item in row_text.splitlines() if item.strip()]
+            release_name, release_date = self._extract_release_metadata(row_text)
             has_download = row.locator(".download .track-download-lnk").count() > 0
             has_vote = row.locator(".vote").count() > 0
             candidates.append(
@@ -250,6 +371,8 @@ class SoundeoAutomation:
                     soundeo_track_id=track_id,
                     title=title,
                     artists=artists,
+                    release_name=release_name,
+                    release_date=release_date,
                     is_available=has_download and not has_vote,
                     is_downloaded=mark_downloaded,
                     url=url,
@@ -409,6 +532,12 @@ class SoundeoAutomation:
             return False
         return False
 
+    def _safe_inner_text(self, locator, timeout: int = 1_000) -> str:
+        try:
+            return locator.inner_text(timeout=timeout)
+        except Exception:
+            return ""
+
     def _split_track_link(self, value: str) -> tuple[str, str]:
         if " - " not in value:
             return "", value.strip()
@@ -420,6 +549,13 @@ class SoundeoAutomation:
         if base_url.endswith("/search"):
             return f"{base_url}?{urlencode({'q': query})}"
         return f"{self.settings.soundeo_base_url.rstrip('/')}/search?{urlencode({'q': query})}"
+
+    def _extract_release_metadata(self, row_text: str) -> tuple[str | None, str | None]:
+        compact = " ".join(part.strip() for part in row_text.splitlines() if part.strip())
+        match = re.search(r"\bby\s+(?P<release>.+?)\s+at\s+(?P<date>\d{4}-\d{2}-\d{2})\b", compact)
+        if not match:
+            return None, None
+        return match.group("release").strip(), match.group("date")
 
     def _soundeo_track_id(self, url: str, fallback: str) -> str:
         tail = url.rstrip("/").rsplit("/", 1)[-1]

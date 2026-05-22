@@ -37,6 +37,7 @@ class SpotifyTrack:
     duration_ms: int | None = None
     isrc: str | None = None
     release_name: str | None = None
+    release_date: str | None = None
 
 
 @dataclass(slots=True)
@@ -55,6 +56,7 @@ class SoundeoCandidate:
     artists: str
     duration_seconds: int | None = None
     release_name: str | None = None
+    release_date: str | None = None
     is_available: bool = False
     is_downloaded: bool = False
     url: str | None = None

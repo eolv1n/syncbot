@@ -10,16 +10,22 @@ NOISE_PATTERNS = [
     r"\bradio edit\b",
     r"\bfeat\.?\b",
     r"\bft\.?\b",
+    r"\bmixed\b",
 ]
 
-REMIX_PATTERN = re.compile(r"\(([^)]*(mix|edit|remix|version|vip)[^)]*)\)", re.IGNORECASE)
-SUFFIX_REMIX_PATTERN = re.compile(r"\s[-–]\s([^()]*\b(mix|edit|remix|version|vip|rework)\b[^()]*)$", re.IGNORECASE)
+REMIX_PATTERN = re.compile(r"\(([^)]*(mix|edit|extended|remix|version|vip|rework)[^)]*)\)", re.IGNORECASE)
+SUFFIX_REMIX_PATTERN = re.compile(
+    r"\s[-–]\s([^()]*\b(mix|edit|extended|remix|version|vip|rework)\b[^()]*)$",
+    re.IGNORECASE,
+)
+TRAILING_MIXED_PATTERN = re.compile(r"\s[-–]\s*mixed\s*$", re.IGNORECASE)
 
 
 def _clean_piece(value: str) -> str:
     value = unicodedata.normalize("NFKD", value)
     value = "".join(char for char in value if not unicodedata.combining(char))
     value = value.casefold()
+    value = re.sub(r"\b(?:[a-z]\.){2,}[a-z]?\.?", lambda match: match.group(0).replace(".", ""), value)
     value = value.replace("&", " and ")
     value = re.sub(r"[`'’‘\"“”]+", "", value)
     value = re.sub(r"[\[\]{}()\-_/,:;.!?+]+", " ", value)
@@ -30,7 +36,8 @@ def _clean_piece(value: str) -> str:
 
 
 def extract_remix(value: str) -> str | None:
-    match = REMIX_PATTERN.search(value) or SUFFIX_REMIX_PATTERN.search(value)
+    search_value = TRAILING_MIXED_PATTERN.sub("", value)
+    match = REMIX_PATTERN.search(search_value) or SUFFIX_REMIX_PATTERN.search(search_value)
     if not match:
         return None
     remix = _clean_piece(match.group(1))

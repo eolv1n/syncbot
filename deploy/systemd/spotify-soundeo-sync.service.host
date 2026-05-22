@@ -1,0 +1,14 @@
+[Unit]
+Description=Spotify to Soundeo sync service
+After=network-online.target
+Wants=network-online.target
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=eolv
+Group=eolv
+WorkingDirectory=/home/eolv/projects/syncbot
+ExecStart=/usr/bin/docker compose run --rm app python -m app daily-sync
+Restart=no

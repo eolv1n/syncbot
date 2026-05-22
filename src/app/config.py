@@ -55,6 +55,7 @@ class AppSettings:
         self.waitlist_retry_days = _as_int(os.getenv("WAITLIST_RETRY_DAYS"), 1, min_value=1)
         self.soundeo_max_results = _as_int(os.getenv("SOUNDEO_MAX_RESULTS"), 10, min_value=1)
         self.soundeo_headless = _as_bool(os.getenv("SOUNDEO_HEADLESS"), True)
+        self.soundeo_voting_enabled = _as_bool(os.getenv("SOUNDEO_VOTING_ENABLED"), True)
 
         self.base_dir = _as_path(os.getenv("BASE_DIR"), PROJECT_ROOT)
         self.data_dir = _as_path(os.getenv("DATA_DIR"), self.base_dir / "data")
