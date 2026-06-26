@@ -16,4 +16,4 @@ data/
 logs/
 artifacts/
 playwright/.auth/
-
+.codex
