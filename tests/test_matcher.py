@@ -196,6 +196,53 @@ class MatcherTests(unittest.TestCase):
         assert result.candidate is not None
         self.assertEqual(result.candidate.soundeo_track_id, "original")
 
+    def test_pick_best_match_allows_remixer_extended_mix_for_remix_track(self) -> None:
+        track = SpotifyTrack(
+            spotify_track_id="remixer-extended",
+            artists_raw="The Chemical Brothers, Chris Lake, Q-Tip",
+            title_raw="Galvanize - Chris Lake Remix",
+            added_at=datetime(2026, 1, 1, tzinfo=UTC),
+            release_date="2025-08-29",
+        )
+        result = pick_best_match(
+            track,
+            [
+                SoundeoCandidate(
+                    soundeo_track_id="soundeo-galvanize",
+                    title="Galvanize (Chris Lake Extended Mix)",
+                    artists="Chris Lake, The Chemical Brothers",
+                    release_date="2025-08-29",
+                    is_available=True,
+                )
+            ],
+        )
+        self.assertIsNotNone(result.candidate)
+        assert result.candidate is not None
+        self.assertEqual(result.candidate.soundeo_track_id, "soundeo-galvanize")
+
+    def test_pick_best_match_allows_extended_mix_for_base_track(self) -> None:
+        track = SpotifyTrack(
+            spotify_track_id="base-extended",
+            artists_raw="Sultan + Shepard",
+            title_raw="Indieholics",
+            added_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        result = pick_best_match(
+            track,
+            [
+                SoundeoCandidate(
+                    soundeo_track_id="soundeo-indieholics",
+                    title="Indieholics (Extended Mix)",
+                    artists="Sultan + Shepard",
+                    release_date="2026-03-26",
+                    is_available=True,
+                )
+            ],
+        )
+        self.assertIsNotNone(result.candidate)
+        assert result.candidate is not None
+        self.assertEqual(result.candidate.soundeo_track_id, "soundeo-indieholics")
+
     def test_pick_best_match_handles_short_title_tokens(self) -> None:
         track = SpotifyTrack(
             spotify_track_id="short-title",

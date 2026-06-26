@@ -56,6 +56,19 @@ class SyncRepository:
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def _effective_track_age_date_sql(self) -> str:
+        return """
+            CASE
+                WHEN s.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+                    THEN substr(s.release_date, 1, 10)
+                WHEN s.release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]'
+                    THEN substr(s.release_date, 1, 7) || '-01'
+                WHEN s.release_date GLOB '[0-9][0-9][0-9][0-9]'
+                    THEN s.release_date || '-01-01'
+                ELSE substr(s.added_at, 1, 10)
+            END
+        """
+
     def get_state(self, key: str) -> str | None:
         with self.connection() as conn:
             row = conn.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
@@ -198,8 +211,8 @@ class SyncRepository:
         filters: list[str] = []
         if older_than_days is not None:
             cutoff = datetime.now(UTC) - timedelta(days=older_than_days)
-            filters.append("s.added_at < ?")
-            params.append(cutoff.isoformat())
+            filters.append(f"{self._effective_track_age_date_sql()} < ?")
+            params.append(cutoff.date().isoformat())
         if status is not None:
             filters.append("w.review_status = ?")
             params.append(status)
@@ -254,7 +267,7 @@ class SyncRepository:
         now = datetime.now(UTC).isoformat()
         with self.connection() as conn:
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE waitlist
                 SET review_status = 'manual_review',
                     manual_review_reason = ?,
@@ -262,11 +275,11 @@ class SyncRepository:
                 WHERE review_status = 'active'
                   AND spotify_track_id IN (
                     SELECT spotify_track_id
-                    FROM spotify_tracks
-                    WHERE added_at < ?
+                    FROM spotify_tracks s
+                    WHERE {self._effective_track_age_date_sql()} < ?
                   )
                 """,
-                (reason, now, cutoff.isoformat()),
+                (reason, now, cutoff.date().isoformat()),
             )
             return cursor.rowcount
 
@@ -320,6 +333,60 @@ class SyncRepository:
                 (spotify_track_id, action_type.value),
             ).fetchone()
         return row is not None
+
+    def was_successful_like_recorded(self, spotify_track_id: str) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM actions
+                WHERE spotify_track_id = ?
+                  AND action_type = ?
+                  AND action_result = ?
+                LIMIT 1
+                """,
+                (
+                    spotify_track_id,
+                    ActionType.LIKE.value,
+                    TrackStatus.LIKED_WAITING_AVAILABILITY.value,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def successful_status_for_track(self, spotify_track_id: str) -> TrackStatus | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT action_result AS status
+                FROM actions
+                WHERE spotify_track_id = ?
+                  AND action_result IN (?, ?)
+                ORDER BY action_at DESC
+                LIMIT 1
+                """,
+                (
+                    spotify_track_id,
+                    TrackStatus.DOWNLOADED_ALREADY.value,
+                    TrackStatus.STARRED.value,
+                ),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    """
+                    SELECT availability_status AS status
+                    FROM soundeo_matches
+                    WHERE spotify_track_id = ?
+                      AND availability_status IN (?, ?)
+                    ORDER BY last_checked_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        spotify_track_id,
+                        TrackStatus.DOWNLOADED_ALREADY.value,
+                        TrackStatus.STARRED.value,
+                    ),
+                ).fetchone()
+        return None if row is None else TrackStatus(row["status"])
 
     def export_summary(self, settings: AppSettings, summary: RunSummary) -> Path:
         filename = f"{summary.started_at.strftime('%Y%m%dT%H%M%SZ')}-{summary.mode}.json"

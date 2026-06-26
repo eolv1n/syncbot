@@ -141,6 +141,21 @@ class SyncRunner:
         match = pick_best_match(track, candidates)
 
         if match.candidate is None:
+            previous_success = self.repository.successful_status_for_track(track.spotify_track_id)
+            if previous_success is not None:
+                if not self.settings.dry_run:
+                    self.repository.clear_waitlist(track.spotify_track_id)
+                    self.repository.record_action(
+                        track.spotify_track_id,
+                        ActionType.SKIP,
+                        previous_success.value,
+                        "preserved previous successful status after empty Soundeo search",
+                    )
+                if previous_success == TrackStatus.DOWNLOADED_ALREADY:
+                    summary.downloaded_already += 1
+                elif previous_success == TrackStatus.STARRED:
+                    summary.starred += 1
+                return
             if not self.settings.dry_run:
                 self.repository.record_match(track.spotify_track_id, match, TrackStatus.NOT_FOUND_WAITLIST)
                 self.repository.put_waitlist(track.spotify_track_id, WaitlistReason.NOT_FOUND, self.settings.waitlist_retry_days)
@@ -193,7 +208,7 @@ class SyncRunner:
                 summary.waitlisted += 1
             return
 
-        if not self.repository.was_action_recorded(track.spotify_track_id, ActionType.LIKE):
+        if not self.repository.was_successful_like_recorded(track.spotify_track_id):
             status = self.soundeo.apply_action(match, ActionType.LIKE)
             if status == TrackStatus.LIKED_WAITING_AVAILABILITY:
                 if not self.settings.dry_run:

@@ -26,6 +26,7 @@ SEARCH_SUFFIX_VARIANT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 TRAILING_SEARCH_MIXED_PATTERN = re.compile(r"\s[-–]\s*mixed\s*$", re.IGNORECASE)
+CATALOG_CODE_PATTERN = re.compile(r"\s*\(([A-Z]{2,}\d{2,}|[A-Z]+\d+[A-Z0-9]*)\)", re.IGNORECASE)
 
 
 class SoundeoAutomation:
@@ -152,13 +153,27 @@ class SoundeoAutomation:
         return self._dedupe_queries(candidates)
 
     def _title_search_candidates(self, normalized: NormalizedTrack, raw_title: str) -> list[str]:
-        candidates = [self._raw_base_title(raw_title), normalized.title, raw_title]
+        base_title = self._raw_base_title(raw_title)
+        stripped_catalog_title = self._strip_catalog_codes(base_title)
+        normalized_without_catalog = self._strip_catalog_codes(normalized.title)
+        candidates = [
+            base_title,
+            stripped_catalog_title,
+            normalized.title,
+            normalized_without_catalog,
+            raw_title,
+            self._strip_catalog_codes(raw_title),
+        ]
         return self._dedupe_queries(candidates)
 
     def _raw_base_title(self, raw_title: str) -> str:
         value = TRAILING_SEARCH_MIXED_PATTERN.sub("", raw_title).strip()
         value = SEARCH_PAREN_VARIANT_PATTERN.sub("", value).strip()
         value = SEARCH_SUFFIX_VARIANT_PATTERN.sub("", value).strip()
+        return re.sub(r"\s+", " ", value).strip()
+
+    def _strip_catalog_codes(self, value: str) -> str:
+        value = CATALOG_CODE_PATTERN.sub("", value).strip()
         return re.sub(r"\s+", " ", value).strip()
 
     def _compact_initialisms(self, value: str) -> str:

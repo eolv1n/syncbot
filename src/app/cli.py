@@ -116,7 +116,11 @@ def main(argv: list[str] | None = None) -> int:
                 status="active",
             )
             if not args.apply:
-                print(f"Would mark {len(rows)} active waitlist tracks for manual review. Use --apply to change SQLite.")
+                print(
+                    f"Would mark {len(rows)} active waitlist tracks for manual review "
+                    "using Spotify release_date age when available, falling back to added_at. "
+                    "Use --apply to change SQLite."
+                )
                 return 0
             changed = runner.repository.mark_old_waitlist_for_manual_review(args.older_than_days, reason)
             print(f"Marked {changed} waitlist tracks for manual review.")

@@ -140,7 +140,7 @@ def _variant_gate(track_variant: str | None, candidate: SoundeoCandidate) -> boo
     if track_kind == "base" and candidate_kind == "remix":
         return False
     if track_kind == "remix" and candidate_kind == "base":
-        return False
+        return _variant_identity_matches(track_variant, candidate_variant)
     if track_kind == "remix" and candidate_kind == "remix":
         return _variant_identity_matches(track_variant, candidate_variant)
     return True

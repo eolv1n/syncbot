@@ -46,6 +46,16 @@ class SoundeoSearchQueryTests(unittest.TestCase):
         self.assertIn("Reset Robot Can U Feel It", queries)
         self.assertIn("Reset Robot - Can U Feel It", queries)
 
+    def test_search_queries_strip_catalog_code_for_artist_fallbacks(self) -> None:
+        queries = self._queries(
+            "Paul Thomas, Weird Sounding Dude",
+            "Summersault (ULF019) - Weird Sounding Dude Remix",
+        )
+
+        self.assertIn("Paul Thomas Summersault", queries)
+        self.assertIn("Paul Thomas - Summersault", queries)
+        self.assertIn("Weird Sounding Dude Summersault", queries)
+
 
 if __name__ == "__main__":
     unittest.main()

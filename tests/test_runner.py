@@ -206,6 +206,65 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(match_args[1].candidate.soundeo_track_id, candidate.soundeo_track_id)
             self.assertEqual(match_args[2], TrackStatus.PREMIUM_REQUIRED)
 
+    def test_premium_required_like_can_be_retried_when_voting_is_enabled(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            _, runner = self._make_runner(tmpdir)
+            track = make_track("retry-like-track", 1)
+            normalized = normalize_track(track)
+            summary = runner.run.__globals__["RunSummary"](mode="sync-track-ids")
+            candidate = SoundeoCandidate(
+                soundeo_track_id="soundeo-retry-like",
+                title=track.title_raw,
+                artists=track.artists_raw,
+                is_available=False,
+            )
+
+            runner.repository.upsert_spotify_track(track, normalized)
+            runner.repository.record_action(track.spotify_track_id, ActionType.LIKE, TrackStatus.PREMIUM_REQUIRED.value)
+            runner.soundeo.search_track = MagicMock(return_value=[candidate])
+            runner.soundeo.apply_action = MagicMock(return_value=TrackStatus.LIKED_WAITING_AVAILABILITY)
+
+            runner._process_track(track, normalized, summary)
+
+            self.assertEqual(summary.liked, 1)
+            runner.soundeo.apply_action.assert_called_once()
+            self.assertTrue(runner.repository.was_successful_like_recorded(track.spotify_track_id))
+
+    def test_empty_search_does_not_degrade_previous_star_to_waitlist(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            _, runner = self._make_runner(tmpdir)
+            track = make_track("previously-starred", 1)
+            normalized = normalize_track(track)
+            summary = runner.run.__globals__["RunSummary"](mode="daily-sync")
+
+            runner.repository.upsert_spotify_track(track, normalized)
+            runner.repository.record_action(track.spotify_track_id, ActionType.STAR, TrackStatus.STARRED.value)
+            runner.repository.put_waitlist(track.spotify_track_id, WaitlistReason.NOT_FOUND, 1)
+            runner.soundeo.search_track = MagicMock(return_value=[])
+
+            runner._process_track(track, normalized, summary)
+
+            self.assertEqual(summary.starred, 1)
+            self.assertEqual(summary.waitlisted, 0)
+            self.assertEqual(runner.repository.waitlist_report(), [])
+            actions = []
+            with runner.repository.connection() as conn:
+                actions = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
+                        SELECT action_type, action_result, notes
+                        FROM actions
+                        WHERE spotify_track_id = ?
+                        ORDER BY id
+                        """,
+                        (track.spotify_track_id,),
+                    )
+                ]
+            self.assertEqual(actions[-1]["action_type"], ActionType.SKIP.value)
+            self.assertEqual(actions[-1]["action_result"], TrackStatus.STARRED.value)
+            self.assertIn("preserved previous successful status", actions[-1]["notes"])
+
     def test_problem_tracks_are_human_readable(self) -> None:
         with TemporaryDirectory() as tmpdir:
             _, runner = self._make_runner(tmpdir)
@@ -243,6 +302,37 @@ class RunnerTests(unittest.TestCase):
             report = runner.repository.waitlist_report(older_than_days=365, status="manual_review")
             self.assertEqual(len(report), 1)
             self.assertEqual(report[0]["spotify_track_id"], "old-track")
+
+    def test_manual_review_age_uses_release_date_before_added_at(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            _, runner = self._make_runner(tmpdir)
+            old_release_recent_like = SpotifyTrack(
+                spotify_track_id="old-release-recent-like",
+                artists_raw="Old Release",
+                title_raw="Recent Like",
+                added_at=datetime.now(UTC),
+                release_date="2025-01-10",
+            )
+            fresh_release_old_like = SpotifyTrack(
+                spotify_track_id="fresh-release-old-like",
+                artists_raw="Fresh Release",
+                title_raw="Old Like",
+                added_at=datetime.now(UTC) - timedelta(days=500),
+                release_date=datetime.now(UTC).date().isoformat(),
+            )
+            for track in (old_release_recent_like, fresh_release_old_like):
+                runner.repository.upsert_spotify_track(track, normalize_track(track))
+                runner.repository.put_waitlist(track.spotify_track_id, WaitlistReason.NOT_FOUND, 1)
+
+            changed = runner.repository.mark_old_waitlist_for_manual_review(120, "test_release_date_age")
+
+            self.assertEqual(changed, 1)
+            report = runner.repository.waitlist_report(status="manual_review")
+            self.assertEqual(len(report), 1)
+            self.assertEqual(report[0]["spotify_track_id"], old_release_recent_like.spotify_track_id)
+            active = runner.repository.waitlist_report(status="active")
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["spotify_track_id"], fresh_release_old_like.spotify_track_id)
 
     def test_refresh_spotify_metadata_does_not_touch_soundeo(self) -> None:
         with TemporaryDirectory() as tmpdir:
